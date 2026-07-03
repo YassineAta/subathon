@@ -8,6 +8,12 @@ const fs = require('fs');
 const path = require('path');
 const { exec } = require('child_process');
 
+if (typeof WebSocket === 'undefined' || typeof fetch === 'undefined') {
+  console.error('\nThis needs Node.js 22 or newer. Run start.bat to auto-install,');
+  console.error('or manually: winget install -e --id OpenJS.NodeJS.LTS\n');
+  process.exit(1);
+}
+
 const PORT = 4025;
 const STATE_FILE = path.join(__dirname, 'state.json');
 const PUBLIC_DIR = path.join(__dirname, 'public');
@@ -16,8 +22,8 @@ const PUSHER_URL = `wss://ws-us2.pusher.com/app/${PUSHER_KEY}?protocol=7&client=
 
 // ---------- state ----------
 const defaultState = {
-  channelSlug: '',
-  chatroomId: null,
+  channelSlug: 'louay_cherni',
+  chatroomId: 35425945,
   status: 'idle', // idle | running | paused | ended
   endsAt: null, // epoch ms, only meaningful while running
   remainingMs: 0, // authoritative while idle/paused

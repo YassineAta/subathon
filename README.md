@@ -27,14 +27,29 @@ Note: subs are only counted while the overlay is open somewhere (OBS running). I
 
 ## Option B — Local server (control panel UI)
 
-1. Double-click **start.bat** (keep the window open; auto-restarts on crash).
-2. Control panel opens at **http://127.0.0.1:4025/** — set initial minutes, press **START**.
+Fresh PC (no Node, no git needed):
+1. Download **https://github.com/YassineAta/subathon/archive/refs/heads/main.zip** and extract it anywhere.
+2. Double-click **start.bat** — if Node.js is missing it installs it automatically (accept the admin prompt), then starts the timer and opens the control panel. Keep the window open while streaming; it auto-restarts on crash.
 3. OBS → Browser source → `http://127.0.0.1:4025/overlay`, size **900 × 280**.
 
-Same rules, but with a full panel: rate, cap, pause, exact set, simulate buttons, event log.
-State in `state.json`. Overlay params: `?size=120` · `?subs=1` · `?ends=0` · `?demo=1`.
+Already connected to kick.com/louay_cherni out of the box. Full panel: rate, cap, pause, exact set, simulate buttons, event log. State in `state.json`.
+Overlay params: `?size=120` · `?subs=1` · `?ends=0` · `?demo=1`.
 
-Use ONE option at a time (they keep separate states).
+Command-line equivalent:
+```
+git clone https://github.com/YassineAta/subathon
+cd subathon
+start.bat
+```
+Manual Node install if you ever need it: `winget install -e --id OpenJS.NodeJS.LTS`
+
+Use ONE option at a time (A and B keep separate states).
+
+## Caching — why it won't bite mid-stream
+- The local overlay/panel are served with `Cache-Control: no-store` — OBS always loads the current files, never a stale copy.
+- The timer itself never depends on any browser cache: local version keeps state in `state.json` on disk (atomic writes); hosted version keeps it in OBS's own storage.
+- If a browser source ever looks frozen: right-click it → **Refresh cache of current page**.
+- Hosted version only: after a code update is pushed, GitHub Pages can serve the previous version for ~10 min.
 
 ## Diagnostics
 - `node test-pusher.js 35425945` — raw Kick chat connection test.
