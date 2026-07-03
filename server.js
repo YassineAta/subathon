@@ -24,6 +24,7 @@ const PUSHER_URL = `wss://ws-us2.pusher.com/app/${PUSHER_KEY}?protocol=7&client=
 const defaultState = {
   channelSlug: 'louay_cherni',
   chatroomId: 35425945,
+  channelId: 35714276, // numeric channel id — extra pusher channel for sub events
   status: 'idle', // idle | running | paused | ended
   endsAt: null, // epoch ms, only meaningful while running
   remainingMs: 0, // authoritative while idle/paused
@@ -33,6 +34,9 @@ const defaultState = {
   minutesPerSub: 15,
   capMinutes: 0, // 0 = no cap on remaining time
   acceptWhenEnded: false, // subs after 00:00:00 restart the timer
+  timerColor: '#ffffff',
+  strokeColor: '#000000',
+  strokeWidth: 0, // px, 0 = no stroke
   log: [],
 };
 let state = { ...defaultState };
@@ -153,6 +157,7 @@ let lastChatAt = null;
 let backoff = 1000;
 let reconnectTimer = null;
 const unknownLogged = new Map();
+const chatFeed = []; // last 30 chat messages, in-memory only (connection test feed)
 
 const IGNORED_EVENTS = new Set([
   'App\\Events\\ChatMessageEvent',
@@ -234,6 +239,10 @@ function handleKickEvent(msg) {
 
   if (name === 'pusher:connection_established') {
     kws.send(JSON.stringify({ event: 'pusher:subscribe', data: { auth: '', channel: `chatrooms.${state.chatroomId}.v2` } }));
+    // Bonus coverage: sub events are also published on channel.{id}
+    if (state.channelId) {
+      kws.send(JSON.stringify({ event: 'pusher:subscribe', data: { auth: '', channel: `channel.${state.channelId}` } }));
+    }
     return;
   }
   if (name === 'pusher:ping') {
@@ -241,11 +250,13 @@ function handleKickEvent(msg) {
     return;
   }
   if (name === 'pusher_internal:subscription_succeeded') {
-    kickStatus = 'connected';
-    backoff = 1000;
-    log(`Connected to Kick chat (chatroom ${state.chatroomId})`);
-    save();
-    broadcast();
+    if (String(msg.channel || '').startsWith('chatrooms.')) {
+      kickStatus = 'connected';
+      backoff = 1000;
+      log(`Connected to Kick chat (chatroom ${state.chatroomId})`);
+      save();
+      broadcast();
+    }
     return;
   }
   if (name === 'pusher:error') {
@@ -255,6 +266,14 @@ function handleKickEvent(msg) {
 
   if (name === 'App\\Events\\ChatMessageEvent') {
     lastChatAt = Date.now();
+    const sender = data.sender || {};
+    chatFeed.push({
+      t: Date.now(),
+      user: String(sender.username || '?').slice(0, 40),
+      text: String(data.content || '').slice(0, 200),
+    });
+    if (chatFeed.length > 30) chatFeed.splice(0, chatFeed.length - 30);
+    broadcast();
     return;
   }
   if (name === 'App\\Events\\SubscriptionEvent') {
@@ -269,6 +288,10 @@ function handleKickEvent(msg) {
     onSubs(gifter, names.length || 1, 'gift', true);
     return;
   }
+  // Note: channel.{id} also emits App\Events\ChannelSubscriptionEvent for subs.
+  // Deliberately NOT counted (chatroom events are authoritative; counting both
+  // risks double-adds on gifts) — it falls through to the unknown-event logger
+  // below, so it shows up in the panel log as proof the sub pipe is live.
 
   // Unknown event discovery: surface new event types (e.g. Kicks/donations)
   // in the panel log, max once per 10 min per event type.
@@ -311,13 +334,18 @@ function publicState(extra) {
     minutesPerSub: state.minutesPerSub,
     capMinutes: state.capMinutes,
     acceptWhenEnded: state.acceptWhenEnded,
+    timerColor: state.timerColor,
+    strokeColor: state.strokeColor,
+    strokeWidth: state.strokeWidth,
     channelSlug: state.channelSlug,
     chatroomId: state.chatroomId,
+    channelId: state.channelId,
     startedAt: state.startedAt,
     kick: kickStatus,
     lastChatAt,
     serverNow: Date.now(),
     log: state.log.slice(-40),
+    chat: chatFeed.slice(-15),
     ...extra,
   };
 }
@@ -511,8 +539,32 @@ const server = http.createServer(async (req, res) => {
         if (body.acceptWhenEnded !== undefined) {
           state.acceptWhenEnded = !!body.acceptWhenEnded;
         }
+        {
+          const hex = (v) => {
+            const s = String(v).trim().replace(/^([0-9a-fA-F]{6})$/, '#$1');
+            return /^#[0-9a-fA-F]{6}$/.test(s) ? s.toLowerCase() : null;
+          };
+          let styled = false;
+          if (body.timerColor !== undefined) {
+            const v = hex(body.timerColor);
+            if (v && v !== state.timerColor) { state.timerColor = v; styled = true; }
+          }
+          if (body.strokeColor !== undefined) {
+            const v = hex(body.strokeColor);
+            if (v && v !== state.strokeColor) { state.strokeColor = v; styled = true; }
+          }
+          if (body.strokeWidth !== undefined) {
+            const v = num(body.strokeWidth, 0, 12);
+            if (v !== null && v !== state.strokeWidth) { state.strokeWidth = v; styled = true; }
+          }
+          if (styled) log(`Overlay style: ${state.timerColor}, stroke ${state.strokeColor} ${state.strokeWidth}px`);
+        }
         if (body.channelSlug !== undefined) {
           state.channelSlug = String(body.channelSlug).trim().toLowerCase();
+        }
+        if (body.channelId !== undefined) {
+          const v = num(body.channelId, 0, 1e12);
+          if (v !== null) state.channelId = Math.round(v);
         }
         if (body.chatroomId !== undefined) {
           const v = num(body.chatroomId, 1, 1e12);

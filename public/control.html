@@ -53,12 +53,33 @@
   .dot.connected { background: var(--green); box-shadow: 0 0 6px var(--green); }
   .dot.connecting { background: var(--amber); }
   .sect { font-size: 11.5px; letter-spacing: .14em; color: var(--mut); margin-bottom: 10px; }
-  #log {
+  #log, #chat {
     max-height: 230px; overflow-y: auto; font-size: 12.5px;
     font-family: Consolas, monospace; color: #b9c2b9;
   }
-  #log div { padding: 2.5px 0; border-bottom: 1px solid #1d201d; }
-  #log .t { color: #5f675f; margin-right: 8px; }
+  #chat { max-height: 190px; }
+  #log div, #chat div { padding: 2.5px 0; border-bottom: 1px solid #1d201d; }
+  #log .t, #chat .t { color: #5f675f; margin-right: 8px; }
+  #chat b { color: #7fd85c; font-weight: 600; margin-right: 7px; }
+  input[type=color] {
+    width: 36px; height: 30px; padding: 2px; background: #0b0c0b;
+    border: 1px solid var(--line); border-radius: 6px; cursor: pointer;
+  }
+  #stylePreview {
+    margin-top: 12px; border-radius: 8px; padding: 14px 0 10px; text-align: center;
+    background: linear-gradient(90deg, #ececec 0%, #9a9a9a 35%, #3a3a3a 65%, #060606 100%);
+  }
+  #pvText {
+    position: relative; font-size: 36px; font-weight: 800;
+    font-variant-numeric: tabular-nums; letter-spacing: .02em;
+    color: var(--tcolor, #ffffff);
+    text-shadow: 0 2px 14px rgba(0,0,0,.85), 0 0 3px rgba(0,0,0,.9);
+  }
+  #pvText::before {
+    content: attr(data-text); position: absolute; left: 0; top: 0;
+    -webkit-text-stroke: calc(var(--strokew, 0px) * 2) var(--strokec, #000000);
+    -webkit-text-fill-color: transparent; text-shadow: none; z-index: -1;
+  }
   .help { font-size: 12.5px; color: var(--mut); line-height: 1.55; }
   .help a { color: #7fd85c; }
   code { background: #0b0c0b; padding: 2px 6px; border-radius: 4px; font-size: 12.5px; color: #a5e88a; }
@@ -108,6 +129,12 @@
       <button data-adj="-5">−5</button>
     </div>
     <div class="row" style="margin-top:10px">
+      <label>Add / remove</label>
+      <input type="number" id="adjMins" placeholder="min" min="0" step="1">
+      <button id="btnAdjAdd">+ Add</button>
+      <button id="btnAdjSub">− Remove</button>
+    </div>
+    <div class="row" style="margin-top:10px">
       <label>Set remaining to</label>
       <input type="number" id="setMins" placeholder="min" min="0" step="1">
       <button id="btnSet">Set</button>
@@ -134,6 +161,30 @@
     </div>
     <div class="row" style="margin-top:10px">
       <label><input type="checkbox" id="cfgAccept"> subs received after 00:00:00 restart the timer</label>
+    </div>
+  </div>
+
+  <!-- Overlay style -->
+  <div class="card">
+    <div class="sect">OVERLAY STYLE</div>
+    <div class="row" style="gap:22px">
+      <span class="row" style="gap:8px">
+        <label>Timer color</label>
+        <input type="color" id="colTimer" value="#ffffff">
+        <input type="text" id="hexTimer" value="#ffffff" style="width:88px" spellcheck="false">
+      </span>
+      <span class="row" style="gap:8px">
+        <label>Stroke</label>
+        <input type="color" id="colStroke" value="#000000">
+        <input type="text" id="hexStroke" value="#000000" style="width:88px" spellcheck="false">
+        <input type="number" id="strokeW" value="0" min="0" max="12" step="1" style="width:64px" title="Stroke width in px — 0 = off">
+        <label>px</label>
+      </span>
+    </div>
+    <div id="stylePreview"><span id="pvText" data-text="04:37:52">04:37:52</span></div>
+    <div class="help" style="margin-top:8px">
+      Applies to the overlay instantly, mid-stream. The strip above previews light → dark scenes.
+      Stroke <b>0</b> = off; 2–3&nbsp;px is usually enough.
     </div>
   </div>
 
@@ -170,6 +221,17 @@
       size <b>900 × 280</b>. Big countdown, tiny end date under it.
       Options: <code>?size=120</code> bigger, <code>?subs=1</code> also show sub count,
       <code>?ends=0</code> hide the end date, <code>?demo=1</code> preview.
+    </div>
+  </div>
+
+  <!-- Live chat (connection proof) -->
+  <div class="card">
+    <div class="sect">LIVE CHAT — CONNECTION TEST</div>
+    <div id="chat"><div class="help">No chat seen yet…</div></div>
+    <div class="help" style="margin-top:8px">
+      Full check: <b>1)</b> dot top-right is green · <b>2)</b> type anything in your Kick chat —
+      it must appear here within ~2&nbsp;s (that's the same pipe sub events arrive on) ·
+      <b>3)</b> “Simulate 1 sub” above → overlay pulses <b>+15 MIN</b> and the countdown jumps.
     </div>
   </div>
 
@@ -222,6 +284,14 @@
   function setVal(el, v) {
     if (document.activeElement !== el) el.value = v;
   }
+  function esc(s) { return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;'); }
+
+  function applyPreview() {
+    var pv = $('stylePreview');
+    pv.style.setProperty('--tcolor', $('hexTimer').value);
+    pv.style.setProperty('--strokec', $('hexStroke').value);
+    pv.style.setProperty('--strokew', (parseFloat($('strokeW').value) || 0) + 'px');
+  }
 
   function render() {
     if (!S) return;
@@ -261,6 +331,23 @@
     if (document.activeElement !== $('cfgAccept')) $('cfgAccept').checked = !!S.acceptWhenEnded;
     setVal($('cfgSlug'), S.channelSlug || '');
     setVal($('cfgChatroom'), S.chatroomId || '');
+    setVal($('hexTimer'), S.timerColor || '#ffffff');
+    setVal($('colTimer'), S.timerColor || '#ffffff');
+    setVal($('hexStroke'), S.strokeColor || '#000000');
+    setVal($('colStroke'), S.strokeColor || '#000000');
+    setVal($('strokeW'), S.strokeWidth || 0);
+    applyPreview();
+
+    // live chat feed
+    var chatEl = $('chat'), chatHtml = '';
+    var msgs = (S.chat || []).slice().reverse();
+    for (var c = 0; c < msgs.length; c++) {
+      var C = msgs[c], ct = new Date(C.t);
+      chatHtml += '<div><span class="t">' + pad(ct.getHours()) + ':' + pad(ct.getMinutes()) + ':' + pad(ct.getSeconds()) +
+        '</span><b>' + esc(C.user) + '</b>' + esc(C.text) + '</div>';
+    }
+    if (!chatHtml) chatHtml = '<div class="help">No chat seen yet — type something in your Kick chat and it appears here.</div>';
+    if (chatEl.innerHTML !== chatHtml) chatEl.innerHTML = chatHtml;
 
     // log
     var el = $('log');
@@ -299,6 +386,13 @@
   document.querySelectorAll('[data-adj]').forEach(function (b) {
     b.onclick = function () { api('/api/adjust', { minutes: parseFloat(b.dataset.adj) }); };
   });
+  function customAdj(sign) {
+    var m = parseFloat($('adjMins').value);
+    if (isNaN(m) || m <= 0) return toast('Enter minutes first');
+    api('/api/adjust', { minutes: sign * m });
+  }
+  $('btnAdjAdd').onclick = function () { customAdj(1); };
+  $('btnAdjSub').onclick = function () { customAdj(-1); };
   $('btnSet').onclick = function () {
     var m = parseFloat($('setMins').value);
     if (isNaN(m) || m < 0) return toast('Enter minutes');
@@ -325,6 +419,39 @@
     api('/api/config', { acceptWhenEnded: this.checked });
   };
 
+  // --- overlay style ---
+  var styleT = null;
+  function pushStyle() {
+    clearTimeout(styleT);
+    styleT = setTimeout(function () {
+      api('/api/config', {
+        timerColor: $('hexTimer').value.trim(),
+        strokeColor: $('hexStroke').value.trim(),
+        strokeWidth: parseFloat($('strokeW').value) || 0
+      });
+    }, 120);
+  }
+  function normHex(el) {
+    var v = el.value.trim();
+    if (/^[0-9a-f]{6}$/i.test(v)) v = '#' + v;
+    if (!/^#[0-9a-f]{6}$/i.test(v)) return null;
+    el.value = v.toLowerCase();
+    return el.value;
+  }
+  $('colTimer').oninput = function () { $('hexTimer').value = this.value; applyPreview(); pushStyle(); };
+  $('colStroke').oninput = function () { $('hexStroke').value = this.value; applyPreview(); pushStyle(); };
+  $('hexTimer').onchange = function () {
+    var v = normHex(this);
+    if (!v) return toast('Hex like #53fc18');
+    $('colTimer').value = v; applyPreview(); pushStyle();
+  };
+  $('hexStroke').onchange = function () {
+    var v = normHex(this);
+    if (!v) return toast('Hex like #000000');
+    $('colStroke').value = v; applyPreview(); pushStyle();
+  };
+  $('strokeW').onchange = function () { applyPreview(); pushStyle(); };
+
   // --- kick setup ---
   function updateApiLink() {
     var slug = $('cfgSlug').value.trim().toLowerCase();
@@ -336,20 +463,24 @@
   $('pasteBox').oninput = function () {
     var txt = this.value.trim();
     if (!txt) return;
-    var id = null;
+    var id = null, chanId = null;
     if (/^\d+$/.test(txt)) id = parseInt(txt, 10);
     if (!id) {
       var m = txt.match(/"chatroom"\s*:\s*\{[^}]*?"id"\s*:\s*(\d+)/);
       if (m) id = parseInt(m[1], 10);
+      var m2 = txt.match(/^\s*\{\s*"id"\s*:\s*(\d+)/);
+      if (m2) chanId = parseInt(m2[1], 10);
     }
     if (!id) {
       try {
         var j = JSON.parse(txt);
         if (j.chatroom && j.chatroom.id) id = j.chatroom.id;
+        if (j.id) chanId = j.id;
       } catch (e) {}
     }
     if (id) {
       $('cfgChatroom').value = id;
+      $('cfgChatroom').dataset.channelId = chanId || '';
       this.value = '';
       toast('Chatroom ID found: ' + id + ' — press Connect');
     }
@@ -359,7 +490,10 @@
     var slug = $('cfgSlug').value.trim().toLowerCase();
     var id = parseInt($('cfgChatroom').value, 10);
     if (!id) return toast('Chatroom ID missing — use the link + paste box');
-    api('/api/config', { channelSlug: slug, chatroomId: id }).then(function () {
+    var cfg = { channelSlug: slug, chatroomId: id };
+    var chanId = parseInt($('cfgChatroom').dataset.channelId || '', 10);
+    if (chanId) cfg.channelId = chanId;
+    api('/api/config', cfg).then(function () {
       toast('Connecting to Kick…');
     });
   };

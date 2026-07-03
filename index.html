@@ -20,11 +20,23 @@
     font-size: 1em;
     font-weight: 800;
     line-height: 1;
-    color: #ffffff;
+    color: var(--tcolor, #ffffff);
     font-variant-numeric: tabular-nums;
     letter-spacing: 0.015em;
     text-shadow: 0 2px 14px rgba(0,0,0,.85), 0 0 3px rgba(0,0,0,.9);
     transition: color .35s ease;
+    position: relative;
+  }
+  /* Stroke = a stroked copy of the digits painted UNDER the fill, so the fill
+     never gets eaten by the stroke (robust in OBS's older Chromium). */
+  #timer::before {
+    content: attr(data-text);
+    position: absolute;
+    left: 0; top: 0;
+    -webkit-text-stroke: calc(var(--strokew, 0px) * 2) var(--strokec, #000000);
+    -webkit-text-fill-color: transparent;
+    text-shadow: none;
+    z-index: -1;
   }
   #meta {
     margin-top: 0.2em;
@@ -82,6 +94,12 @@
 (function () {
   // ---------- config (URL params, defaults baked for louay_cherni) ----------
   var q = new URLSearchParams(location.search);
+  function hexParam(name, def) {
+    var v = (q.get(name) || '').trim();
+    if (!v) return def;
+    if (v.charAt(0) !== '#') v = '#' + v;
+    return /^#[0-9a-f]{6}$/i.test(v) ? v.toLowerCase() : def;
+  }
   var CFG = {
     channel: (q.get('channel') || 'louay_cherni').toLowerCase(),
     chatroom: parseInt(q.get('chatroom') || '35425945', 10),
@@ -90,6 +108,9 @@
     showEnds: q.get('ends') !== '0',
     admins: (q.get('admins') || '').toLowerCase().split(',').filter(Boolean),
     rate: parseFloat(q.get('rate') || '15'),
+    color: hexParam('color', '#ffffff'),
+    stroke: hexParam('stroke', '#000000'),
+    strokew: Math.max(0, Math.min(12, parseFloat(q.get('strokew') || '0') || 0)),
     demo: q.get('demo') === '1'
   };
   var LS_KEY = 'subathon_' + CFG.chatroom;
@@ -101,11 +122,19 @@
   var elBurst = document.getElementById('burst');
   elWrap.style.fontSize = CFG.size + 'px';
 
+  function applyStyle() {
+    elWrap.style.setProperty('--tcolor', (S && S.timerColor) || CFG.color);
+    elWrap.style.setProperty('--strokec', (S && S.strokeColor) || CFG.stroke);
+    var w = S && S.strokeWidth !== null && S.strokeWidth !== undefined ? S.strokeWidth : CFG.strokew;
+    elWrap.style.setProperty('--strokew', (w || 0) + 'px');
+  }
+
   // ---------- state ----------
   function defaults() {
     return {
       status: 'idle', endsAt: null, remainingMs: 0, startedAt: null,
-      subCount: 0, totalMinutesFromSubs: 0, minutesPerSub: CFG.rate
+      subCount: 0, totalMinutesFromSubs: 0, minutesPerSub: CFG.rate,
+      timerColor: null, strokeColor: null, strokeWidth: null // null = use URL param / default
     };
   }
   var S = defaults();
@@ -177,15 +206,24 @@
     var content = String(d.content || '').trim();
     if (content.slice(0, 6).toLowerCase() !== '!timer') return;
     if (!isTrusted(d.sender || {})) return;
-    var m = content.match(/^!timer\s+([a-z]+)(?:\s+(-?\d+(?:\.\d+)?))?/i);
+    var m = content.match(/^!timer\s+([a-z]+)(?:\s+(\S.*))?/i);
     if (!m) return;
-    applyCommand(m[1].toLowerCase(), m[2] !== undefined ? parseFloat(m[2]) : null);
+    applyCommand(m[1].toLowerCase(), m[2] !== undefined ? m[2].trim() : null);
   }
-  function applyCommand(cmd, n) {
+  function parseHex(v) {
+    v = String(v || '').trim();
+    if (!v) return null;
+    if (v.charAt(0) !== '#') v = '#' + v;
+    return /^#[0-9a-f]{6}$/i.test(v) ? v.toLowerCase() : null;
+  }
+  function applyCommand(cmd, arg) {
+    var n = arg !== null && arg !== undefined ? parseFloat(arg) : null;
     switch (cmd) {
       case 'start':
         if (n > 0) {
+          var keep = { timerColor: S.timerColor, strokeColor: S.strokeColor, strokeWidth: S.strokeWidth };
           S = defaults();
+          S.timerColor = keep.timerColor; S.strokeColor = keep.strokeColor; S.strokeWidth = keep.strokeWidth;
           S.minutesPerSub = CFG.rate;
           S.status = 'running';
           S.startedAt = Date.now();
@@ -209,9 +247,32 @@
         if (S.status === 'paused') { S.status = 'running'; S.endsAt = Date.now() + S.remainingMs; S.remainingMs = 0; }
         break;
       case 'end': endTimer(); break;
+      case 'ping': showBurst('CHAT OK ✓'); break; // connection test: type "!timer ping" in chat
+      case 'color': {
+        // !timer color 53fc18 | !timer color reset
+        if (String(arg || '').toLowerCase() === 'reset') { S.timerColor = null; showBurst('COLOR RESET'); }
+        else { var c = parseHex(arg); if (c) { S.timerColor = c; showBurst('COLOR ' + c.toUpperCase()); } }
+        break;
+      }
+      case 'stroke': {
+        // !timer stroke 000000 3 | !timer stroke 3 | !timer stroke off
+        var t = String(arg || '').trim().split(/\s+/).filter(Boolean);
+        if (!t.length) break;
+        if (t[0].toLowerCase() === 'off' || t[0].toLowerCase() === 'reset') { S.strokeWidth = 0; showBurst('STROKE OFF'); break; }
+        var sc = parseHex(t[0]);
+        var w = sc ? (t.length > 1 ? parseFloat(t[1]) : null) : parseFloat(t[0]);
+        if (sc) {
+          S.strokeColor = sc;
+          if (w === null && !(S.strokeWidth > 0 || CFG.strokew > 0)) w = 2; // color alone implies turning it on
+        }
+        if (w !== null && !isNaN(w)) S.strokeWidth = Math.max(0, Math.min(12, w));
+        if (sc || (w !== null && !isNaN(w))) showBurst('STROKE SET');
+        break;
+      }
       default: return;
     }
     save();
+    applyStyle();
     render();
   }
 
@@ -303,7 +364,7 @@
     if (!CFG.demo && wsStatus !== 'connected' && Date.now() - disconnectedSince > 8000) {
       parts.push('<span class="warn">RECONNECTING</span>');
     }
-    if (big !== lastTimerText) { elTimer.textContent = big; lastTimerText = big; }
+    if (big !== lastTimerText) { elTimer.textContent = big; elTimer.dataset.text = big; lastTimerText = big; }
     if (elWrap.dataset.status !== status) elWrap.dataset.status = status;
     var meta = parts.join('<span class="dot">·</span>');
     if (meta !== lastMetaText) { elMeta.innerHTML = meta || '&nbsp;'; lastMetaText = meta; }
@@ -324,12 +385,13 @@
   } else {
     connect();
   }
+  applyStyle();
   setInterval(render, 200);
   render();
 
   // debug/test hooks
   window.T = {
-    cmd: function (line) { var m = String(line).match(/^([a-z]+)(?:\s+(-?\d+(?:\.\d+)?))?/i); if (m) applyCommand(m[1].toLowerCase(), m[2] !== undefined ? parseFloat(m[2]) : null); },
+    cmd: function (line) { var m = String(line).match(/^([a-z]+)(?:\s+(\S.*))?/i); if (m) applyCommand(m[1].toLowerCase(), m[2] !== undefined ? m[2].trim() : null); },
     sim: function (n) { onSubs('test_user', n || 1, n > 1 ? 'gift' : 'sub'); },
     state: function () { return JSON.parse(JSON.stringify(S)); },
     ws: function () { return wsStatus; },

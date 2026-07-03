@@ -20,11 +20,23 @@
     font-size: 1em;
     font-weight: 800;
     line-height: 1;
-    color: #ffffff;
+    color: var(--tcolor, #ffffff);
     font-variant-numeric: tabular-nums;
     letter-spacing: 0.015em;
     text-shadow: 0 2px 14px rgba(0,0,0,.85), 0 0 3px rgba(0,0,0,.9);
     transition: color .35s ease;
+    position: relative;
+  }
+  /* Stroke = a stroked copy of the digits painted UNDER the fill, so the fill
+     never gets eaten by the stroke (robust in OBS's older Chromium). */
+  #timer::before {
+    content: attr(data-text);
+    position: absolute;
+    left: 0; top: 0;
+    -webkit-text-stroke: calc(var(--strokew, 0px) * 2) var(--strokec, #000000);
+    -webkit-text-fill-color: transparent;
+    text-shadow: none;
+    z-index: -1;
   }
   #meta {
     margin-top: 0.2em;
@@ -36,6 +48,7 @@
     white-space: nowrap;
   }
   #meta .dot { opacity: .45; padding: 0 .55em; }
+  #meta .warn { color: #ff6b6b; }
 
   #wrap[data-status="idle"]   #timer { color: rgba(255,255,255,.45); }
   #wrap[data-status="paused"] #timer { color: #f5b942; }
@@ -94,6 +107,14 @@
   var offset = 0;
   var lastTimerText = '';
   var lastMetaText = '';
+  var kickOkAt = Date.now(); // last time the Kick link was known-good
+
+  function applyStyle() {
+    if (!S) return;
+    elWrap.style.setProperty('--tcolor', S.timerColor || '#ffffff');
+    elWrap.style.setProperty('--strokec', S.strokeColor || '#000000');
+    elWrap.style.setProperty('--strokew', (S.strokeWidth || 0) + 'px');
+  }
 
   function pad(n) { return (n < 10 ? '0' : '') + n; }
 
@@ -126,8 +147,11 @@
     else if (status === 'ended') parts.push('ENDED');
     else if (showEnds) parts.push('ENDS ' + endsClock());
     if (showSubs && S && status !== 'idle') parts.push(S.subCount + ' SUBS');
+    if (S && S.kick && S.kick !== 'connected' && Date.now() - kickOkAt > 8000) {
+      parts.push('<span class="warn">CHAT RECONNECTING</span>');
+    }
 
-    if (big !== lastTimerText) { elTimer.textContent = big; lastTimerText = big; }
+    if (big !== lastTimerText) { elTimer.textContent = big; elTimer.dataset.text = big; lastTimerText = big; }
     if (elWrap.dataset.status !== status) elWrap.dataset.status = status;
     var meta = parts.join('<span class="dot">·</span>');
     if (meta !== lastMetaText) { elMeta.innerHTML = meta || '&nbsp;'; lastMetaText = meta; }
@@ -160,6 +184,8 @@
         var d = JSON.parse(e.data);
         offset = d.serverNow - Date.now();
         S = d;
+        if (d.kick === 'connected') kickOkAt = Date.now();
+        applyStyle();
         if (d.burst) showBurst(d.burst);
         render();
       } catch (err) {}
