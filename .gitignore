@@ -1,0 +1,5 @@
+state.json
+*.png
+.claude/
+.gstack/
+node_modules/

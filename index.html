@@ -1,0 +1,341 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Subathon</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Inter:wght@600;800&display=swap');
+  html, body { margin: 0; padding: 0; background: transparent; overflow: hidden; }
+  body { font-family: Inter, 'Segoe UI', system-ui, sans-serif; -webkit-font-smoothing: antialiased; }
+
+  #wrap {
+    display: inline-flex;
+    flex-direction: column;
+    align-items: center;
+    padding: 10px 22px;
+    font-size: 96px;
+    position: relative;
+  }
+  #timer {
+    font-size: 1em;
+    font-weight: 800;
+    line-height: 1;
+    color: #ffffff;
+    font-variant-numeric: tabular-nums;
+    letter-spacing: 0.015em;
+    text-shadow: 0 2px 14px rgba(0,0,0,.85), 0 0 3px rgba(0,0,0,.9);
+    transition: color .35s ease;
+  }
+  #meta {
+    margin-top: 0.2em;
+    font-size: 0.125em;
+    font-weight: 600;
+    letter-spacing: 0.22em;
+    color: rgba(255,255,255,.75);
+    text-shadow: 0 1px 8px rgba(0,0,0,.9);
+    white-space: nowrap;
+  }
+  #meta .dot { opacity: .45; padding: 0 .55em; }
+  #meta .warn { color: #ff6b6b; }
+
+  #wrap[data-status="idle"]   #timer { color: rgba(255,255,255,.45); }
+  #wrap[data-status="paused"] #timer { color: #f5b942; }
+  #wrap[data-status="ended"]  #timer { color: #ff4d4d; }
+
+  #burst {
+    position: absolute;
+    top: -0.42em;
+    left: 50%;
+    transform: translateX(-50%);
+    font-size: 0.30em;
+    font-weight: 800;
+    letter-spacing: 0.08em;
+    color: #53fc18;
+    text-shadow: 0 1px 10px rgba(0,0,0,.9);
+    opacity: 0;
+    pointer-events: none;
+    white-space: nowrap;
+  }
+  #burst.go { animation: rise 2.4s ease-out forwards; }
+  @keyframes rise {
+    0%   { opacity: 0; transform: translateX(-50%) translateY(0.5em); }
+    12%  { opacity: 1; transform: translateX(-50%) translateY(0); }
+    75%  { opacity: 1; }
+    100% { opacity: 0; transform: translateX(-50%) translateY(-0.55em); }
+  }
+  #timer.pulse { animation: pulse .5s ease; }
+  @keyframes pulse {
+    0% { transform: scale(1); }
+    35% { transform: scale(1.035); }
+    100% { transform: scale(1); }
+  }
+</style>
+</head>
+<body>
+  <div id="wrap" data-status="idle">
+    <div id="burst"></div>
+    <div id="timer">00:00:00</div>
+    <div id="meta">READY</div>
+  </div>
+
+<script>
+(function () {
+  // ---------- config (URL params, defaults baked for louay_cherni) ----------
+  var q = new URLSearchParams(location.search);
+  var CFG = {
+    channel: (q.get('channel') || 'louay_cherni').toLowerCase(),
+    chatroom: parseInt(q.get('chatroom') || '35425945', 10),
+    size: parseInt(q.get('size') || '96', 10),
+    showSubs: q.get('subs') === '1',
+    showEnds: q.get('ends') !== '0',
+    admins: (q.get('admins') || '').toLowerCase().split(',').filter(Boolean),
+    rate: parseFloat(q.get('rate') || '15'),
+    demo: q.get('demo') === '1'
+  };
+  var LS_KEY = 'subathon_' + CFG.chatroom;
+  var PUSHER_URL = 'wss://ws-us2.pusher.com/app/32cbd69e4b950bf97679?protocol=7&client=js&version=8.4.0&flash=false';
+
+  var elWrap = document.getElementById('wrap');
+  var elTimer = document.getElementById('timer');
+  var elMeta = document.getElementById('meta');
+  var elBurst = document.getElementById('burst');
+  elWrap.style.fontSize = CFG.size + 'px';
+
+  // ---------- state ----------
+  function defaults() {
+    return {
+      status: 'idle', endsAt: null, remainingMs: 0, startedAt: null,
+      subCount: 0, totalMinutesFromSubs: 0, minutesPerSub: CFG.rate
+    };
+  }
+  var S = defaults();
+  try {
+    var saved = JSON.parse(localStorage.getItem(LS_KEY));
+    if (saved && typeof saved === 'object') {
+      for (var k in S) if (saved[k] !== undefined) S[k] = saved[k];
+    }
+  } catch (e) {}
+  if (S.status === 'running' && (!S.endsAt || S.endsAt <= Date.now())) {
+    S.status = 'ended'; S.endsAt = null; S.remainingMs = 0;
+  }
+  function save() { try { localStorage.setItem(LS_KEY, JSON.stringify(S)); } catch (e) {} }
+
+  // ---------- timer core ----------
+  function remaining() {
+    if (S.status === 'running') return Math.max(0, S.endsAt - Date.now());
+    return Math.max(0, S.remainingMs || 0);
+  }
+  function endTimer() {
+    S.status = 'ended'; S.endsAt = null; S.remainingMs = 0;
+  }
+  function addMs(ms) {
+    var rem = Math.max(0, remaining() + ms);
+    if (S.status === 'running') {
+      S.endsAt = Date.now() + rem;
+      if (rem === 0) endTimer();
+    } else if (S.status === 'ended') {
+      if (rem > 0) { S.status = 'running'; S.endsAt = Date.now() + rem; }
+    } else {
+      S.remainingMs = rem;
+    }
+  }
+
+  // ---------- subs ----------
+  var recentKeys = {};
+  function isDupe(key) {
+    var now = Date.now();
+    for (var k in recentKeys) if (now - recentKeys[k] > 8000) delete recentKeys[k];
+    if (recentKeys[key]) return true;
+    recentKeys[key] = now;
+    return false;
+  }
+  function onSubs(username, count, kind) {
+    count = Math.max(1, count | 0);
+    if (S.status === 'idle' || S.status === 'ended') return; // only counts while live
+    var mins = S.minutesPerSub * count;
+    S.subCount += count;
+    S.totalMinutesFromSubs += mins;
+    addMs(mins * 60000);
+    save();
+    showBurst(count > 1 ? '×' + count + '  +' + mins + ' MIN' : '+' + mins + ' MIN');
+    render();
+  }
+
+  // ---------- chat commands (broadcaster / mods / ?admins=) ----------
+  function isTrusted(sender) {
+    try {
+      if ((sender.slug || '').toLowerCase() === CFG.channel) return true;
+      if (CFG.admins.indexOf((sender.username || '').toLowerCase()) !== -1) return true;
+      var badges = (sender.identity && sender.identity.badges) || [];
+      for (var i = 0; i < badges.length; i++) {
+        if (badges[i].type === 'broadcaster' || badges[i].type === 'moderator') return true;
+      }
+    } catch (e) {}
+    return false;
+  }
+  function onChat(d) {
+    var content = String(d.content || '').trim();
+    if (content.slice(0, 6).toLowerCase() !== '!timer') return;
+    if (!isTrusted(d.sender || {})) return;
+    var m = content.match(/^!timer\s+([a-z]+)(?:\s+(-?\d+(?:\.\d+)?))?/i);
+    if (!m) return;
+    applyCommand(m[1].toLowerCase(), m[2] !== undefined ? parseFloat(m[2]) : null);
+  }
+  function applyCommand(cmd, n) {
+    switch (cmd) {
+      case 'start':
+        if (n > 0) {
+          S = defaults();
+          S.minutesPerSub = CFG.rate;
+          S.status = 'running';
+          S.startedAt = Date.now();
+          S.endsAt = Date.now() + n * 60000;
+          showBurst('START ' + n + ' MIN');
+        }
+        break;
+      case 'add': if (n) { addMs(n * 60000); showBurst((n > 0 ? '+' : '') + n + ' MIN'); } break;
+      case 'remove': if (n) { addMs(-Math.abs(n) * 60000); showBurst('−' + Math.abs(n) + ' MIN'); } break;
+      case 'set':
+        if (n !== null && n >= 0) {
+          if (n === 0) endTimer();
+          else { S.status = 'running'; S.endsAt = Date.now() + n * 60000; S.remainingMs = 0; }
+        }
+        break;
+      case 'rate': if (n !== null && n >= 0) S.minutesPerSub = n; break;
+      case 'pause':
+        if (S.status === 'running') { S.remainingMs = Math.max(0, S.endsAt - Date.now()); S.status = 'paused'; S.endsAt = null; }
+        break;
+      case 'resume':
+        if (S.status === 'paused') { S.status = 'running'; S.endsAt = Date.now() + S.remainingMs; S.remainingMs = 0; }
+        break;
+      case 'end': endTimer(); break;
+      default: return;
+    }
+    save();
+    render();
+  }
+
+  // Keyboard fallback (OBS: right-click source -> Interact): P pause/resume, +/- 5 min
+  document.addEventListener('keydown', function (e) {
+    if (e.key === 'p' || e.key === 'P') applyCommand(S.status === 'paused' ? 'resume' : 'pause', null);
+    else if (e.key === '+' || e.key === '=') applyCommand('add', 5);
+    else if (e.key === '-') applyCommand('remove', 5);
+  });
+
+  // ---------- Kick (Pusher) ----------
+  var ws = null, wsStatus = 'off', gen = 0, backoff = 1000, lastActivity = 0, disconnectedSince = Date.now();
+  function connect() {
+    if (CFG.demo || !CFG.chatroom) return;
+    var myGen = ++gen;
+    try { if (ws) { ws.onclose = null; ws.onmessage = null; ws.close(); } } catch (e) {}
+    wsStatus = 'connecting';
+    ws = new WebSocket(PUSHER_URL);
+    ws.onopen = function () { lastActivity = Date.now(); };
+    ws.onmessage = function (ev) {
+      if (myGen !== gen) return;
+      lastActivity = Date.now();
+      var msg;
+      try { msg = JSON.parse(ev.data); } catch (e) { return; }
+      handleEvent(msg);
+    };
+    ws.onclose = function () {
+      if (myGen !== gen) return;
+      if (wsStatus === 'connected') disconnectedSince = Date.now();
+      wsStatus = 'off';
+      setTimeout(connect, backoff);
+      backoff = Math.min(backoff * 2, 30000);
+    };
+    ws.onerror = function () {};
+  }
+  function handleEvent(msg) {
+    var name = msg.event || '';
+    var data = msg.data;
+    if (typeof data === 'string') { try { data = JSON.parse(data); } catch (e) { data = {}; } }
+    data = data || {};
+
+    if (name === 'pusher:connection_established') {
+      ws.send(JSON.stringify({ event: 'pusher:subscribe', data: { auth: '', channel: 'chatrooms.' + CFG.chatroom + '.v2' } }));
+    } else if (name === 'pusher:ping') {
+      ws.send(JSON.stringify({ event: 'pusher:pong', data: {} }));
+    } else if (name === 'pusher_internal:subscription_succeeded') {
+      wsStatus = 'connected';
+      backoff = 1000;
+    } else if (name === 'App\\Events\\ChatMessageEvent') {
+      onChat(data);
+    } else if (name === 'App\\Events\\SubscriptionEvent') {
+      if (!isDupe('s:' + String(data.username || '').toLowerCase())) onSubs(data.username, 1, 'sub');
+    } else if (name === 'App\\Events\\GiftedSubscriptionsEvent') {
+      var names = Array.isArray(data.gifted_usernames) ? data.gifted_usernames : [];
+      var key = 'g:' + (data.gifter_username || '') + ':' + (names.slice().sort().join(',') || names.length);
+      if (!isDupe(key)) onSubs(data.gifter_username, names.length || 1, 'gift');
+    }
+  }
+  // Keepalive: ping when quiet 60s, force reconnect when dead 3 min
+  setInterval(function () {
+    if (!ws || ws.readyState !== 1) return;
+    var quiet = Date.now() - lastActivity;
+    if (quiet > 180000) { try { ws.close(); } catch (e) {} }
+    else if (quiet > 60000) { try { ws.send(JSON.stringify({ event: 'pusher:ping', data: {} })); } catch (e) {} }
+  }, 30000);
+
+  // ---------- render ----------
+  var lastTimerText = '', lastMetaText = '';
+  function pad(n) { return (n < 10 ? '0' : '') + n; }
+  function fmt(ms) {
+    var s = Math.max(0, Math.round(ms / 1000));
+    return pad(Math.floor(s / 3600)) + ':' + pad(Math.floor((s % 3600) / 60)) + ':' + pad(s % 60);
+  }
+  function endsClock() {
+    var d = new Date(Date.now() + remaining());
+    return d.toLocaleDateString(undefined, { weekday: 'short' }).toUpperCase() +
+      ' ' + pad(d.getDate()) + '/' + pad(d.getMonth() + 1) +
+      ' ' + pad(d.getHours()) + ':' + pad(d.getMinutes());
+  }
+  function render() {
+    var status = S.status;
+    var big = fmt(remaining());
+    var parts = [];
+    if (status === 'idle') parts.push('READY · !TIMER START 120');
+    else if (status === 'paused') parts.push('PAUSED');
+    else if (status === 'ended') parts.push('ENDED');
+    else if (CFG.showEnds) parts.push('ENDS ' + endsClock());
+    if (CFG.showSubs && status !== 'idle') parts.push(S.subCount + ' SUBS');
+    if (!CFG.demo && wsStatus !== 'connected' && Date.now() - disconnectedSince > 8000) {
+      parts.push('<span class="warn">RECONNECTING</span>');
+    }
+    if (big !== lastTimerText) { elTimer.textContent = big; lastTimerText = big; }
+    if (elWrap.dataset.status !== status) elWrap.dataset.status = status;
+    var meta = parts.join('<span class="dot">·</span>');
+    if (meta !== lastMetaText) { elMeta.innerHTML = meta || '&nbsp;'; lastMetaText = meta; }
+  }
+  function showBurst(label) {
+    elBurst.textContent = label;
+    elBurst.classList.remove('go');
+    void elBurst.offsetWidth;
+    elBurst.classList.add('go');
+    elTimer.classList.remove('pulse');
+    void elTimer.offsetWidth;
+    elTimer.classList.add('pulse');
+  }
+
+  if (CFG.demo) {
+    S = { status: 'running', endsAt: Date.now() + (3 * 3600 + 47 * 60 + 12) * 1000, remainingMs: 0, subCount: 142, minutesPerSub: 15, totalMinutesFromSubs: 0, startedAt: Date.now() };
+    setInterval(function () { showBurst('+15 MIN'); }, 4000);
+  } else {
+    connect();
+  }
+  setInterval(render, 200);
+  render();
+
+  // debug/test hooks
+  window.T = {
+    cmd: function (line) { var m = String(line).match(/^([a-z]+)(?:\s+(-?\d+(?:\.\d+)?))?/i); if (m) applyCommand(m[1].toLowerCase(), m[2] !== undefined ? parseFloat(m[2]) : null); },
+    sim: function (n) { onSubs('test_user', n || 1, n > 1 ? 'gift' : 'sub'); },
+    state: function () { return JSON.parse(JSON.stringify(S)); },
+    ws: function () { return wsStatus; },
+    reset: function () { S = defaults(); save(); render(); }
+  };
+})();
+</script>
+</body>
+</html>

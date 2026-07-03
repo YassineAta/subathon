@@ -1,0 +1,174 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Subathon Overlay</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Inter:wght@600;800&display=swap');
+  html, body { margin: 0; padding: 0; background: transparent; overflow: hidden; }
+  body { font-family: Inter, 'Segoe UI', system-ui, sans-serif; -webkit-font-smoothing: antialiased; }
+
+  #wrap {
+    display: inline-flex;
+    flex-direction: column;
+    align-items: center;
+    padding: 10px 22px;
+    font-size: var(--size, 96px);
+    position: relative;
+  }
+  #timer {
+    font-size: 1em;
+    font-weight: 800;
+    line-height: 1;
+    color: #ffffff;
+    font-variant-numeric: tabular-nums;
+    letter-spacing: 0.015em;
+    text-shadow: 0 2px 14px rgba(0,0,0,.85), 0 0 3px rgba(0,0,0,.9);
+    transition: color .35s ease;
+  }
+  #meta {
+    margin-top: 0.2em;
+    font-size: 0.125em;
+    font-weight: 600;
+    letter-spacing: 0.22em;
+    color: rgba(255,255,255,.75);
+    text-shadow: 0 1px 8px rgba(0,0,0,.9);
+    white-space: nowrap;
+  }
+  #meta .dot { opacity: .45; padding: 0 .55em; }
+
+  #wrap[data-status="idle"]   #timer { color: rgba(255,255,255,.45); }
+  #wrap[data-status="paused"] #timer { color: #f5b942; }
+  #wrap[data-status="ended"]  #timer { color: #ff4d4d; }
+
+  #burst {
+    position: absolute;
+    top: -0.42em;
+    left: 50%;
+    transform: translateX(-50%);
+    font-size: 0.30em;
+    font-weight: 800;
+    letter-spacing: 0.08em;
+    color: #53fc18;
+    text-shadow: 0 1px 10px rgba(0,0,0,.9);
+    opacity: 0;
+    pointer-events: none;
+    white-space: nowrap;
+  }
+  #burst.go { animation: rise 2.4s ease-out forwards; }
+  @keyframes rise {
+    0%   { opacity: 0; transform: translateX(-50%) translateY(0.5em); }
+    12%  { opacity: 1; transform: translateX(-50%) translateY(0); }
+    75%  { opacity: 1; }
+    100% { opacity: 0; transform: translateX(-50%) translateY(-0.55em); }
+  }
+  #timer.pulse { animation: pulse .5s ease; }
+  @keyframes pulse {
+    0% { transform: scale(1); }
+    35% { transform: scale(1.035); }
+    100% { transform: scale(1); }
+  }
+</style>
+</head>
+<body>
+  <div id="wrap" data-status="idle">
+    <div id="burst"></div>
+    <div id="timer">00:00:00</div>
+    <div id="meta">READY</div>
+  </div>
+
+<script>
+(function () {
+  var q = new URLSearchParams(location.search);
+  var sizePx = parseInt(q.get('size') || '96', 10);
+  document.getElementById('wrap').style.fontSize = sizePx + 'px';
+  var showSubs = q.get('subs') === '1';
+  var showEnds = q.get('ends') !== '0';
+
+  var elTimer = document.getElementById('timer');
+  var elMeta = document.getElementById('meta');
+  var elWrap = document.getElementById('wrap');
+  var elBurst = document.getElementById('burst');
+
+  var S = null;
+  var offset = 0;
+  var lastTimerText = '';
+  var lastMetaText = '';
+
+  function pad(n) { return (n < 10 ? '0' : '') + n; }
+
+  function fmt(ms) {
+    var s = Math.max(0, Math.round(ms / 1000));
+    var h = Math.floor(s / 3600);
+    var m = Math.floor((s % 3600) / 60);
+    return pad(h) + ':' + pad(m) + ':' + pad(s % 60);
+  }
+
+  function remaining() {
+    if (!S) return 0;
+    if (S.status === 'running') return Math.max(0, S.endsAt - (Date.now() + offset));
+    return S.remainingMs || 0;
+  }
+
+  function endsClock() {
+    var d = new Date(Date.now() + remaining());
+    return d.toLocaleDateString(undefined, { weekday: 'short' }).toUpperCase() +
+      ' ' + pad(d.getDate()) + '/' + pad(d.getMonth() + 1) +
+      ' ' + pad(d.getHours()) + ':' + pad(d.getMinutes());
+  }
+
+  function render() {
+    var status = S ? S.status : 'idle';
+    var big = fmt(remaining());
+    var parts = [];
+    if (status === 'idle') parts.push('READY');
+    else if (status === 'paused') parts.push('PAUSED');
+    else if (status === 'ended') parts.push('ENDED');
+    else if (showEnds) parts.push('ENDS ' + endsClock());
+    if (showSubs && S && status !== 'idle') parts.push(S.subCount + ' SUBS');
+
+    if (big !== lastTimerText) { elTimer.textContent = big; lastTimerText = big; }
+    if (elWrap.dataset.status !== status) elWrap.dataset.status = status;
+    var meta = parts.join('<span class="dot">·</span>');
+    if (meta !== lastMetaText) { elMeta.innerHTML = meta || '&nbsp;'; lastMetaText = meta; }
+  }
+
+  function showBurst(b) {
+    var label = '+' + b.minutes + ' MIN';
+    if (b.count > 1) label = '×' + b.count + '  ' + label;
+    elBurst.textContent = label;
+    elBurst.classList.remove('go');
+    void elBurst.offsetWidth;
+    elBurst.classList.add('go');
+    elTimer.classList.remove('pulse');
+    void elTimer.offsetWidth;
+    elTimer.classList.add('pulse');
+  }
+
+  if (q.get('demo') === '1') {
+    S = {
+      status: 'running',
+      endsAt: Date.now() + (3 * 3600 + 47 * 60 + 12) * 1000,
+      remainingMs: 0,
+      subCount: 142
+    };
+    setInterval(function () { showBurst({ minutes: 15, count: 1 }); }, 4000);
+  } else {
+    var es = new EventSource('/events');
+    es.onmessage = function (e) {
+      try {
+        var d = JSON.parse(e.data);
+        offset = d.serverNow - Date.now();
+        S = d;
+        if (d.burst) showBurst(d.burst);
+        render();
+      } catch (err) {}
+    };
+  }
+
+  setInterval(render, 200);
+  render();
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,376 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Subathon Control</title>
+<style>
+  :root {
+    --bg: #0e0f0e; --card: #171917; --line: #262a26;
+    --text: #e8ece8; --mut: #8a938a; --green: #53fc18;
+    --amber: #f5b942; --red: #ff4d4d;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text);
+    font-family: 'Segoe UI', system-ui, sans-serif; font-size: 14px;
+    display: flex; justify-content: center; padding: 24px 12px 60px;
+  }
+  main { width: 100%; max-width: 620px; }
+  h1 { font-size: 18px; margin: 0; letter-spacing: .04em; }
+  .card {
+    background: var(--card); border: 1px solid var(--line);
+    border-radius: 10px; padding: 16px; margin-top: 14px;
+  }
+  .row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+  .spread { justify-content: space-between; }
+  label { color: var(--mut); font-size: 12.5px; }
+  input[type=number], input[type=text], textarea {
+    background: #0b0c0b; border: 1px solid var(--line); color: var(--text);
+    border-radius: 6px; padding: 7px 9px; font-size: 14px; outline: none;
+  }
+  input:focus, textarea:focus { border-color: #3c5c30; }
+  input[type=number] { width: 84px; }
+  button {
+    background: #222622; border: 1px solid #333a33; color: var(--text);
+    border-radius: 6px; padding: 7px 13px; font-size: 13.5px; cursor: pointer;
+  }
+  button:hover { background: #2b302b; }
+  button.primary { background: #1d3d10; border-color: #2f6417; color: #c9ffb0; font-weight: 600; }
+  button.primary:hover { background: #245013; }
+  button.warn { color: #ffb9b9; border-color: #5c2626; }
+  button.warn:hover { background: #2e1717; }
+  .big {
+    font-size: 46px; font-weight: 800; font-variant-numeric: tabular-nums;
+    letter-spacing: .02em; line-height: 1.1;
+  }
+  .big.paused { color: var(--amber); }
+  .big.ended { color: var(--red); }
+  .big.idle { color: var(--mut); }
+  .stat { color: var(--mut); font-size: 12.5px; margin-top: 2px; }
+  .stat b { color: var(--text); font-weight: 600; }
+  .dot { width: 9px; height: 9px; border-radius: 50%; display: inline-block; background: #555; }
+  .dot.connected { background: var(--green); box-shadow: 0 0 6px var(--green); }
+  .dot.connecting { background: var(--amber); }
+  .sect { font-size: 11.5px; letter-spacing: .14em; color: var(--mut); margin-bottom: 10px; }
+  #log {
+    max-height: 230px; overflow-y: auto; font-size: 12.5px;
+    font-family: Consolas, monospace; color: #b9c2b9;
+  }
+  #log div { padding: 2.5px 0; border-bottom: 1px solid #1d201d; }
+  #log .t { color: #5f675f; margin-right: 8px; }
+  .help { font-size: 12.5px; color: var(--mut); line-height: 1.55; }
+  .help a { color: #7fd85c; }
+  code { background: #0b0c0b; padding: 2px 6px; border-radius: 4px; font-size: 12.5px; color: #a5e88a; }
+  textarea { width: 100%; height: 54px; resize: vertical; font-size: 12px; }
+  .hidden { display: none !important; }
+  #toast {
+    position: fixed; bottom: 18px; left: 50%; transform: translateX(-50%);
+    background: #1d3d10; border: 1px solid #2f6417; color: #c9ffb0;
+    padding: 8px 16px; border-radius: 8px; opacity: 0; transition: opacity .25s;
+    pointer-events: none;
+  }
+  #toast.show { opacity: 1; }
+</style>
+</head>
+<body>
+<main>
+  <div class="row spread">
+    <h1>SUBATHON CONTROL</h1>
+    <div class="row" style="gap:7px">
+      <span class="dot" id="kickDot"></span>
+      <span id="kickLabel" class="stat">Kick: not configured</span>
+    </div>
+  </div>
+
+  <!-- Timer -->
+  <div class="card">
+    <div class="row spread">
+      <div>
+        <div class="big idle" id="bigTimer">00:00:00</div>
+        <div class="stat" id="statLine">idle</div>
+      </div>
+      <div style="text-align:right">
+        <div class="stat"><b id="statSubs">0</b> subs</div>
+        <div class="stat"><b id="statAdded">0</b> min from subs</div>
+        <div class="stat" id="statEnds"></div>
+      </div>
+    </div>
+
+    <div class="row" style="margin-top:14px">
+      <input type="number" id="startMins" value="60" min="1" step="1" title="Initial minutes">
+      <button class="primary" id="btnStart">START</button>
+      <button id="btnPause">Pause</button>
+      <span style="flex:1"></span>
+      <button data-adj="15">+15</button>
+      <button data-adj="5">+5</button>
+      <button data-adj="1">+1</button>
+      <button data-adj="-5">−5</button>
+    </div>
+    <div class="row" style="margin-top:10px">
+      <label>Set remaining to</label>
+      <input type="number" id="setMins" placeholder="min" min="0" step="1">
+      <button id="btnSet">Set</button>
+      <span style="flex:1"></span>
+      <button class="warn" id="btnEnd">End now</button>
+      <button class="warn" id="btnReset">Reset</button>
+    </div>
+  </div>
+
+  <!-- Rules -->
+  <div class="card">
+    <div class="sect">RULES</div>
+    <div class="row" style="gap:22px">
+      <span class="row" style="gap:8px">
+        <label>1 sub =</label>
+        <input type="number" id="cfgRate" value="15" min="0" step="0.5">
+        <label>min</label>
+      </span>
+      <span class="row" style="gap:8px">
+        <label>Max remaining</label>
+        <input type="number" id="cfgCap" value="0" min="0" step="10" title="0 = no cap">
+        <label>min (0 = off)</label>
+      </span>
+    </div>
+    <div class="row" style="margin-top:10px">
+      <label><input type="checkbox" id="cfgAccept"> subs received after 00:00:00 restart the timer</label>
+    </div>
+  </div>
+
+  <!-- Kick setup -->
+  <div class="card">
+    <div class="sect">KICK CHANNEL</div>
+    <div class="row">
+      <label>Channel name</label>
+      <input type="text" id="cfgSlug" placeholder="yourchannel" style="width:170px">
+      <label>Chatroom ID</label>
+      <input type="number" id="cfgChatroom" placeholder="—" style="width:110px">
+      <button class="primary" id="btnSaveKick">Connect</button>
+    </div>
+    <div class="help" style="margin-top:10px" id="kickHelp">
+      One-time setup: type your channel name above, then
+      <a id="apiLink" href="#" target="_blank">open this link</a>
+      in your normal browser — it shows a page of text. Copy everything on it
+      (Ctrl+A, Ctrl+C) and paste it below; the chatroom ID is filled in automatically.
+      <textarea id="pasteBox" placeholder='Paste the page content here…' style="margin-top:8px"></textarea>
+    </div>
+  </div>
+
+  <!-- Test + overlay -->
+  <div class="card">
+    <div class="sect">TEST &amp; OVERLAY</div>
+    <div class="row">
+      <button id="btnSim1">Simulate 1 sub</button>
+      <button id="btnSim5">Simulate 5 gifted</button>
+      <span style="flex:1"></span>
+      <button id="btnCopyOverlay">Copy overlay URL</button>
+    </div>
+    <div class="help" style="margin-top:10px">
+      OBS → Sources → <b>Browser</b> → URL <code id="overlayUrl"></code>,
+      size <b>900 × 280</b>. Big countdown, tiny end date under it.
+      Options: <code>?size=120</code> bigger, <code>?subs=1</code> also show sub count,
+      <code>?ends=0</code> hide the end date, <code>?demo=1</code> preview.
+    </div>
+  </div>
+
+  <!-- Log -->
+  <div class="card">
+    <div class="sect">LOG</div>
+    <div id="log"></div>
+  </div>
+</main>
+<div id="toast"></div>
+
+<script>
+(function () {
+  var S = null, offset = 0;
+  var $ = function (id) { return document.getElementById(id); };
+
+  var overlayUrl = location.origin + '/overlay';
+  $('overlayUrl').textContent = overlayUrl;
+
+  function toast(msg) {
+    var t = $('toast');
+    t.textContent = msg;
+    t.classList.add('show');
+    clearTimeout(t._h);
+    t._h = setTimeout(function () { t.classList.remove('show'); }, 1800);
+  }
+
+  function api(path, body) {
+    return fetch(path, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body || {})
+    }).then(function (r) { return r.json(); }).then(function (j) {
+      if (j && j.error) toast('Error: ' + j.error);
+      return j;
+    }).catch(function () { toast('Server unreachable'); });
+  }
+
+  function pad(n) { return (n < 10 ? '0' : '') + n; }
+  function fmt(ms) {
+    var s = Math.max(0, Math.round(ms / 1000));
+    return pad(Math.floor(s / 3600)) + ':' + pad(Math.floor((s % 3600) / 60)) + ':' + pad(s % 60);
+  }
+  function remaining() {
+    if (!S) return 0;
+    if (S.status === 'running') return Math.max(0, S.endsAt - (Date.now() + offset));
+    return S.remainingMs || 0;
+  }
+
+  function setVal(el, v) {
+    if (document.activeElement !== el) el.value = v;
+  }
+
+  function render() {
+    if (!S) return;
+    var big = $('bigTimer');
+    big.textContent = fmt(remaining());
+    big.className = 'big ' + S.status;
+    $('statLine').textContent = S.status + (S.status === 'running' ? '' : '');
+    $('statSubs').textContent = S.subCount;
+    $('statAdded').textContent = Math.round(S.totalMinutesFromSubs * 10) / 10;
+    if (S.status === 'running') {
+      var d = new Date(Date.now() + remaining());
+      var txt = pad(d.getHours()) + ':' + pad(d.getMinutes());
+      if (remaining() > 20 * 3600e3) txt = d.toLocaleDateString(undefined, { weekday: 'short' }) + ' ' + txt;
+      $('statEnds').innerHTML = 'ends at <b>' + txt + '</b>';
+    } else {
+      $('statEnds').textContent = '';
+    }
+    $('btnPause').textContent = S.status === 'paused' ? 'Resume' : 'Pause';
+
+    // kick status
+    var dot = $('kickDot'), lbl = $('kickLabel');
+    dot.className = 'dot ' + S.kick;
+    if (!S.chatroomId) lbl.textContent = 'Kick: not configured';
+    else if (S.kick === 'connected') {
+      var chat = '';
+      if (S.lastChatAt) {
+        var ago = Math.round((Date.now() + offset - S.lastChatAt) / 1000);
+        chat = ' · chat ' + (ago < 5 ? 'live' : ago + 's ago');
+      }
+      lbl.textContent = 'Kick: connected' + chat;
+    }
+    else lbl.textContent = 'Kick: ' + (S.kick === 'connecting' ? 'connecting…' : 'disconnected');
+
+    // settings (don't clobber while typing)
+    setVal($('cfgRate'), S.minutesPerSub);
+    setVal($('cfgCap'), S.capMinutes);
+    if (document.activeElement !== $('cfgAccept')) $('cfgAccept').checked = !!S.acceptWhenEnded;
+    setVal($('cfgSlug'), S.channelSlug || '');
+    setVal($('cfgChatroom'), S.chatroomId || '');
+
+    // log
+    var el = $('log');
+    var html = '';
+    var logs = (S.log || []).slice().reverse();
+    for (var i = 0; i < logs.length; i++) {
+      var L = logs[i];
+      var t = new Date(L.t);
+      html += '<div><span class="t">' + pad(t.getHours()) + ':' + pad(t.getMinutes()) + ':' + pad(t.getSeconds()) +
+        '</span>' + String(L.m).replace(/</g, '&lt;') + '</div>';
+    }
+    if (el.innerHTML !== html) el.innerHTML = html;
+  }
+
+  var es = new EventSource('/events');
+  es.onmessage = function (e) {
+    try {
+      var d = JSON.parse(e.data);
+      offset = d.serverNow - Date.now();
+      S = d;
+      render();
+    } catch (err) {}
+  };
+  setInterval(render, 500);
+
+  // --- timer controls ---
+  $('btnStart').onclick = function () {
+    var m = parseFloat($('startMins').value);
+    if (!m || m <= 0) return toast('Enter initial minutes');
+    if (S && S.subCount > 0 && !confirm('Fresh start resets the sub counter (' + S.subCount + ' subs). Continue?')) return;
+    api('/api/start', { minutes: m });
+  };
+  $('btnPause').onclick = function () {
+    api(S && S.status === 'paused' ? '/api/resume' : '/api/pause');
+  };
+  document.querySelectorAll('[data-adj]').forEach(function (b) {
+    b.onclick = function () { api('/api/adjust', { minutes: parseFloat(b.dataset.adj) }); };
+  });
+  $('btnSet').onclick = function () {
+    var m = parseFloat($('setMins').value);
+    if (isNaN(m) || m < 0) return toast('Enter minutes');
+    api('/api/set', { minutes: m });
+    $('setMins').value = '';
+  };
+  $('btnEnd').onclick = function () {
+    if (confirm('End the subathon now?')) api('/api/end');
+  };
+  $('btnReset').onclick = function () {
+    if (confirm('Reset timer AND sub counter to zero?')) api('/api/reset');
+  };
+
+  // --- rules ---
+  $('cfgRate').onchange = function () {
+    var v = parseFloat(this.value);
+    if (!isNaN(v) && v >= 0) api('/api/config', { minutesPerSub: v });
+  };
+  $('cfgCap').onchange = function () {
+    var v = parseFloat(this.value);
+    if (!isNaN(v) && v >= 0) api('/api/config', { capMinutes: v });
+  };
+  $('cfgAccept').onchange = function () {
+    api('/api/config', { acceptWhenEnded: this.checked });
+  };
+
+  // --- kick setup ---
+  function updateApiLink() {
+    var slug = $('cfgSlug').value.trim().toLowerCase();
+    $('apiLink').href = 'https://kick.com/api/v2/channels/' + (slug || 'YOURCHANNEL');
+  }
+  $('cfgSlug').oninput = updateApiLink;
+  updateApiLink();
+
+  $('pasteBox').oninput = function () {
+    var txt = this.value.trim();
+    if (!txt) return;
+    var id = null;
+    if (/^\d+$/.test(txt)) id = parseInt(txt, 10);
+    if (!id) {
+      var m = txt.match(/"chatroom"\s*:\s*\{[^}]*?"id"\s*:\s*(\d+)/);
+      if (m) id = parseInt(m[1], 10);
+    }
+    if (!id) {
+      try {
+        var j = JSON.parse(txt);
+        if (j.chatroom && j.chatroom.id) id = j.chatroom.id;
+      } catch (e) {}
+    }
+    if (id) {
+      $('cfgChatroom').value = id;
+      this.value = '';
+      toast('Chatroom ID found: ' + id + ' — press Connect');
+    }
+  };
+
+  $('btnSaveKick').onclick = function () {
+    var slug = $('cfgSlug').value.trim().toLowerCase();
+    var id = parseInt($('cfgChatroom').value, 10);
+    if (!id) return toast('Chatroom ID missing — use the link + paste box');
+    api('/api/config', { channelSlug: slug, chatroomId: id }).then(function () {
+      toast('Connecting to Kick…');
+    });
+  };
+
+  // --- test / overlay ---
+  $('btnSim1').onclick = function () { api('/api/simulate', { count: 1 }); };
+  $('btnSim5').onclick = function () { api('/api/simulate', { count: 5 }); };
+  $('btnCopyOverlay').onclick = function () {
+    navigator.clipboard.writeText(overlayUrl).then(function () { toast('Overlay URL copied'); });
+  };
+})();
+</script>
+</body>
+</html>
