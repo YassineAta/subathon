@@ -108,6 +108,9 @@
     showSubs: q.get('subs') === '1',
     showEnds: q.get('ends') !== '0',
     admins: (q.get('admins') || '').toLowerCase().split(',').filter(Boolean),
+    // channel.{id} pusher channel (sub events with recipient counts). Default
+    // only applies with the default chatroom; other channels pass ?channelid=.
+    channelId: parseInt(q.get('channelid') || (q.get('chatroom') ? '0' : '35714276'), 10) || 0,
     rate: parseFloat(q.get('rate') || '15'),
     color: hexParam('color', '#ffffff'),
     stroke: hexParam('stroke', '#000000'),
@@ -175,13 +178,53 @@
   }
 
   // ---------- subs ----------
-  var recentKeys = {};
-  function isDupe(key) {
-    var now = Date.now();
-    for (var k in recentKeys) if (now - recentKeys[k] > 8000) delete recentKeys[k];
-    if (recentKeys[key]) return true;
-    recentKeys[key] = now;
-    return false;
+  // Overlapping events for one sub/gift arrive on two pusher channels with
+  // varying payload shapes. Per-actor 20s credit ledger: recipient-list gifts
+  // count fully once; every other event asserts a total and tops up the
+  // difference — no under-count if any event has the real number, no doubles.
+  var WINDOW = 20000;
+  var recentKeys = {}, credited = {}, hadInstance = {};
+  function sweep(o) { var now = Date.now(); for (var k in o) if (now - (o[k].at !== undefined ? o[k].at : o[k]) > WINDOW) delete o[k]; }
+  function isDupe(key) { sweep(recentKeys); if (recentKeys[key]) return true; recentKeys[key] = Date.now(); return false; }
+  function creditWindow(a) { sweep(credited); return credited[a] ? credited[a].n : 0; }
+  function addCredit(a, n) { var e = credited[a]; credited[a] = { n: (e && Date.now() - e.at < WINDOW ? e.n : 0) + n, at: Date.now() }; }
+  function creditSubs(actor, n, kind, instanceKey) {
+    var a = String(actor || 'someone').toLowerCase();
+    n = Math.max(1, n | 0);
+    if (instanceKey) {
+      if (isDupe(instanceKey)) return; // same gift already seen
+      sweep(hadInstance);
+      var prior = !!hadInstance[a];
+      hadInstance[a] = Date.now();
+      if (!prior) {
+        var missing = n - creditWindow(a); // this gift may be part-credited already
+        if (missing <= 0) return;
+        n = missing;
+      }
+      addCredit(a, n);
+      onSubs(actor, n, kind);
+    } else {
+      var miss = n - creditWindow(a);
+      if (miss <= 0) return;
+      addCredit(a, miss);
+      onSubs(actor, miss, kind);
+    }
+  }
+  function giftInfo(data) {
+    var names = Array.isArray(data.gifted_usernames) ? data.gifted_usernames
+      : Array.isArray(data.usernames) ? data.usernames : [];
+    var count = names.length;
+    var g = data.gift || {};
+    var fields = [data.gifted_quantity, data.quantity, data.count, data.amount, data.total, g.quantity, g.amount, g.count];
+    for (var i = 0; i < fields.length; i++) {
+      var x = Number(fields[i]);
+      if (isFinite(x) && x > count) count = Math.round(x);
+    }
+    return {
+      gifter: data.gifter_username || (data.gifter && data.gifter.username) || data.username || 'someone',
+      names: names,
+      count: Math.max(1, count)
+    };
   }
   function onSubs(username, count, kind) {
     count = Math.max(1, count | 0);
@@ -321,19 +364,28 @@
 
     if (name === 'pusher:connection_established') {
       ws.send(JSON.stringify({ event: 'pusher:subscribe', data: { auth: '', channel: 'chatrooms.' + CFG.chatroom + '.v2' } }));
+      if (CFG.channelId) ws.send(JSON.stringify({ event: 'pusher:subscribe', data: { auth: '', channel: 'channel.' + CFG.channelId } }));
     } else if (name === 'pusher:ping') {
       ws.send(JSON.stringify({ event: 'pusher:pong', data: {} }));
     } else if (name === 'pusher_internal:subscription_succeeded') {
-      wsStatus = 'connected';
-      backoff = 1000;
+      if (String(msg.channel || '').indexOf('chatrooms.') === 0) {
+        wsStatus = 'connected';
+        backoff = 1000;
+      }
     } else if (name === 'App\\Events\\ChatMessageEvent') {
       onChat(data);
     } else if (name === 'App\\Events\\SubscriptionEvent') {
-      if (!isDupe('s:' + String(data.username || '').toLowerCase())) onSubs(data.username, 1, 'sub');
+      creditSubs(data.username, 1, 'sub', null);
     } else if (name === 'App\\Events\\GiftedSubscriptionsEvent') {
-      var names = Array.isArray(data.gifted_usernames) ? data.gifted_usernames : [];
-      var key = 'g:' + (data.gifter_username || '') + ':' + (names.slice().sort().join(',') || names.length);
-      if (!isDupe(key)) onSubs(data.gifter_username, names.length || 1, 'gift');
+      var gi = giftInfo(data);
+      if (gi.names.length) creditSubs(gi.gifter, gi.count, 'gift', 'g:' + String(gi.gifter).toLowerCase() + ':' + gi.names.slice().sort().join(','));
+      else creditSubs(gi.gifter, gi.count, 'gift', null); // short payload: assert, other pipe tops up
+    } else if (name === 'App\\Events\\LuckyUsersWhoGotGiftSubscriptionsEvent') {
+      var gl = giftInfo(data);
+      creditSubs(gl.gifter, gl.count, 'gift', null); // assertion only — usernames may be a subset
+    } else if (name === 'App\\Events\\ChannelSubscriptionEvent') {
+      var nn = Array.isArray(data.user_ids) && data.user_ids.length ? data.user_ids.length : 1;
+      creditSubs(data.username, nn, nn > 1 ? 'gift' : 'sub', null);
     }
   }
   // Keepalive: ping when quiet 60s, force reconnect when dead 3 min

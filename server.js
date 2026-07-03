@@ -106,21 +106,87 @@ function addMs(ms) {
 }
 
 // ---------- sub handling ----------
-const recentKeys = new Map(); // dedupe key -> ts
-function isDupe(key) {
+// Kick fires overlapping events for one sub/gift on two pusher channels
+// (chatrooms.X.v2 and channel.X) and the payload shapes have changed over
+// time (a gift once arrived without gifted_usernames and counted as 1).
+// Strategy: per-actor 20s credit ledger. A gift event WITH a recipient list
+// is an "instance" and counts fully once; every other event only ASSERTS a
+// total for that actor and tops up the difference. If any one event carries
+// the real count we end up correct; the ledger blocks double-counting.
+const WINDOW = 20000;
+const recentKeys = new Map(); // gift instance key -> ts
+const credited = new Map(); // actor(lower) -> { n, at }
+const hadInstance = new Map(); // actor(lower) -> ts
+
+function sweep(map) {
   const now = Date.now();
-  for (const [k, t] of recentKeys) if (now - t > 8000) recentKeys.delete(k);
+  for (const [k, v] of map) if (now - (v.at !== undefined ? v.at : v) > WINDOW) map.delete(k);
+}
+function isDupe(key) {
+  sweep(recentKeys);
   if (recentKeys.has(key)) return true;
-  recentKeys.set(key, now);
+  recentKeys.set(key, Date.now());
   return false;
 }
+function creditWindow(a) {
+  sweep(credited);
+  const e = credited.get(a);
+  return e ? e.n : 0;
+}
+function addCredit(a, n) {
+  const e = credited.get(a);
+  credited.set(a, { n: (e && Date.now() - e.at < WINDOW ? e.n : 0) + n, at: Date.now() });
+}
 
-function onSubs(username, count, kind, skipDedupe) {
-  count = Math.max(1, count | 0);
-  if (!skipDedupe) {
-    const key = kind === 'gift' ? `g:${username}:${count}` : `s:${String(username).toLowerCase()}`;
-    if (isDupe(key)) return;
+function creditSubs(actor, n, kind, instanceKey) {
+  const a = String(actor || 'someone').toLowerCase();
+  n = Math.max(1, n | 0);
+  if (instanceKey) {
+    if (isDupe(instanceKey)) return; // same gift already seen (either pipe/shape)
+    sweep(hadInstance);
+    const prior = hadInstance.has(a);
+    hadInstance.set(a, Date.now());
+    if (!prior) {
+      // Credit may already exist from an assertion event for THIS gift — top up only.
+      const missing = n - creditWindow(a);
+      if (missing <= 0) return;
+      n = missing;
+    } // else: distinct new gift by same actor — count fully
+    addCredit(a, n);
+    onSubs(actor, n, kind);
+  } else {
+    const missing = n - creditWindow(a);
+    if (missing <= 0) return;
+    if (missing < n) log(`Reconciled ${actor}: +${missing} more (event reports ${n} total, ${n - missing} already counted)`);
+    addCredit(a, missing);
+    onSubs(actor, missing, kind);
   }
+}
+
+// Pull a recipient list + count out of any known gift payload shape.
+function giftInfo(data) {
+  const names = Array.isArray(data.gifted_usernames) ? data.gifted_usernames
+    : Array.isArray(data.usernames) ? data.usernames : [];
+  let count = names.length;
+  const g = data.gift || {};
+  for (const v of [data.gifted_quantity, data.quantity, data.count, data.amount, data.total, g.quantity, g.amount, g.count]) {
+    const x = Number(v);
+    if (Number.isFinite(x) && x > count) count = Math.round(x);
+  }
+  const gifter = data.gifter_username || (data.gifter && data.gifter.username) || data.username || 'someone';
+  return { gifter, names, count: Math.max(1, count) };
+}
+
+// Raw capture of every sub/gift-shaped event for offline diagnosis.
+const CAPTURE_FILE = path.join(__dirname, 'events-capture.jsonl');
+function captureEvent(name, data) {
+  try {
+    fs.appendFileSync(CAPTURE_FILE, JSON.stringify({ t: new Date().toISOString(), name, data }) + '\n');
+  } catch {}
+}
+
+function onSubs(username, count, kind) {
+  count = Math.max(1, count | 0);
   if (state.status === 'idle') {
     log(`Sub from ${username} ignored (timer not started)`);
     save();
@@ -277,25 +343,39 @@ function handleKickEvent(msg) {
     return;
   }
   if (name === 'App\\Events\\SubscriptionEvent') {
-    onSubs(data.username || 'someone', 1, 'sub');
+    captureEvent(name, data);
+    creditSubs(data.username || 'someone', 1, 'sub', null);
     return;
   }
   if (name === 'App\\Events\\GiftedSubscriptionsEvent') {
-    const names = Array.isArray(data.gifted_usernames) ? data.gifted_usernames : [];
-    const gifter = data.gifter_username || 'someone';
-    const key = `g:${gifter}:${names.slice().sort().join(',') || names.length}`;
-    if (isDupe(key)) return;
-    onSubs(gifter, names.length || 1, 'gift', true);
+    captureEvent(name, data);
+    const g = giftInfo(data);
+    if (g.names.length) {
+      creditSubs(g.gifter, g.count, 'gift', `g:${String(g.gifter).toLowerCase()}:${g.names.slice().sort().join(',')}`);
+    } else {
+      creditSubs(g.gifter, g.count, 'gift', null); // broken/short payload: assert, let other pipe top up
+    }
     return;
   }
-  // Note: channel.{id} also emits App\Events\ChannelSubscriptionEvent for subs.
-  // Deliberately NOT counted (chatroom events are authoritative; counting both
-  // risks double-adds on gifts) — it falls through to the unknown-event logger
-  // below, so it shows up in the panel log as proof the sub pipe is live.
+  if (name === 'App\\Events\\LuckyUsersWhoGotGiftSubscriptionsEvent') {
+    captureEvent(name, data);
+    const g = giftInfo(data);
+    creditSubs(g.gifter, g.count, 'gift', null); // assertion only — usernames may be a subset
+    return;
+  }
+  // channel.{id} pipe: fires once per sub/gift with user_ids = all recipients.
+  // Assertion-counted: tops up whatever the chatroom events under-reported.
+  if (name === 'App\\Events\\ChannelSubscriptionEvent') {
+    captureEvent(name, data);
+    const n = Array.isArray(data.user_ids) && data.user_ids.length ? data.user_ids.length : 1;
+    creditSubs(data.username || 'someone', n, n > 1 ? 'gift' : 'sub', null);
+    return;
+  }
 
   // Unknown event discovery: surface new event types (e.g. Kicks/donations)
   // in the panel log, max once per 10 min per event type.
   if (!IGNORED_EVENTS.has(name) && name) {
+    if (/gift|subscri/i.test(name)) captureEvent(name, data); // never lose a sub-shaped payload
     const last = unknownLogged.get(name) || 0;
     if (Date.now() - last > 600000) {
       unknownLogged.set(name, Date.now());
@@ -580,7 +660,14 @@ const server = http.createServer(async (req, res) => {
       }
       case '/api/simulate': {
         const count = num(body.count, 1, 500) || 1;
-        onSubs('test_' + Math.random().toString(36).slice(2, 6), count, 'sim', true);
+        onSubs('test_' + Math.random().toString(36).slice(2, 6), count, 'sim');
+        return sendJson(res, 200, { ok: true });
+      }
+      case '/api/inject': {
+        // Dev tool: replay a raw pusher event through the normal handler,
+        // e.g. a line from events-capture.jsonl. Localhost only by design.
+        if (!body.event) return sendJson(res, 400, { error: 'event required' });
+        handleKickEvent({ event: String(body.event), data: body.data || {}, channel: body.channel });
         return sendJson(res, 200, { ok: true });
       }
       default:

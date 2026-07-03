@@ -1,4 +1,5 @@
 state.json
+events-capture.jsonl
 *.png
 .claude/
 .gstack/
