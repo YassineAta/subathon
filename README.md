@@ -5,7 +5,7 @@ Big hours-left countdown, tiny `ENDS SAT 04/07 04:32` line under it.
 
 ## Option A — Hosted (easiest, no server)
 
-OBS → Sources → **Browser** → URL **`https://fieryaaa.github.io/subathon/`**, size **900 × 280**.
+OBS → Sources → **Browser** → URL **`https://yassineata.github.io/subathon/`**, size **900 × 280**.
 **Important:** in the browser source settings, UNCHECK “Shutdown source when not visible”, or subs get missed while the scene is hidden.
 
 The page itself connects to Kick chat, counts subs, and keeps its state in OBS (survives OBS restarts — wall clock keeps counting while OBS is closed). Control it by typing in your own Kick chat (only the broadcaster and moderators are obeyed):
