@@ -29,7 +29,8 @@ Note: subs are only counted while the overlay is open somewhere (OBS running). I
 
 Fresh PC (no Node, no git needed):
 1. Download **https://github.com/YassineAta/subathon/archive/refs/heads/main.zip** and extract it anywhere.
-2. Double-click **start.bat** — if Node.js is missing it installs it automatically (accept the admin prompt), then starts the timer and opens the control panel. Keep the window open while streaming; it auto-restarts on crash.
+2. Double-click **start.bat** — it runs a preflight and fixes whatever is missing:
+   app files (re-downloads from GitHub if deleted) → Node.js (auto-installs, accept the admin prompt) → stuck old instance on port 4025 (stops it) → updates (git installs). Then it starts the timer and opens the control panel. Keep the window open while streaming; it auto-restarts on crash.
 3. OBS → Browser source → `http://127.0.0.1:4025/overlay`, size **900 × 280**.
 
 Already connected to kick.com/louay_cherni out of the box. Full panel: rate, cap, pause, exact set, simulate buttons, event log. State in `state.json`.
