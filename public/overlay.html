@@ -12,7 +12,8 @@
     display: inline-flex;
     flex-direction: column;
     align-items: center;
-    padding: 10px 22px;
+    /* top padding = headroom so the +MIN burst never clips at the viewport edge */
+    padding: 0.42em 22px 10px;
     font-size: var(--size, 96px);
     position: relative;
   }
@@ -39,8 +40,8 @@
     z-index: -1;
   }
   #meta {
-    margin-top: 0.2em;
-    font-size: 0.125em;
+    margin-top: 0.18em;
+    font-size: 0.165em;
     font-weight: 600;
     letter-spacing: 0.22em;
     color: rgba(255,255,255,.75);
@@ -56,7 +57,7 @@
 
   #burst {
     position: absolute;
-    top: -0.42em;
+    top: 0.62em; /* own-em: ≈0.19 wrap-em down — rises to ~0.02 wrap-em, stays in frame */
     left: 50%;
     transform: translateX(-50%);
     font-size: 0.30em;
@@ -95,6 +96,10 @@
   var q = new URLSearchParams(location.search);
   var sizePx = parseInt(q.get('size') || '96', 10);
   document.getElementById('wrap').style.fontSize = sizePx + 'px';
+  // Background is transparent by default (OBS). ?bg=00b140 = solid color for
+  // chroma key / previewing in a normal browser.
+  var bg = (q.get('bg') || '').trim().replace(/^#/, '');
+  if (/^[0-9a-f]{6}$/i.test(bg)) document.body.style.background = '#' + bg;
   var showSubs = q.get('subs') === '1';
   var showEnds = q.get('ends') !== '0';
 
